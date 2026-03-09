@@ -874,7 +874,25 @@
       sfx.fanfare();
     }
 
+    // Expand the hidden input to cover the canvas so iOS can focus it via a real tap.
+    // iOS Safari ignores .focus() called from setTimeout — it must come from a user gesture.
+    // Making the input a transparent overlay means tapping the canvas IS tapping the input.
+    function setNameInputActive(active) {
+      if (!nameEl) return;
+      if (active) {
+        nameEl.style.width = '100%';
+        nameEl.style.height = 'calc(100% - 100px)'; // leaves room for mobile buttons
+        nameEl.style.pointerEvents = 'auto';
+        nameEl.focus(); // works on Android/desktop; iOS needs the user to tap
+      } else {
+        nameEl.style.width = '2px';
+        nameEl.style.height = '2px';
+        nameEl.style.pointerEvents = 'none';
+      }
+    }
+
     function startGame() {
+      setNameInputActive(false);
       if (nameEl) nameEl.blur();   // dismiss mobile keyboard
       score = 0; lives = 3; level = 1;
       initLevel();
@@ -1072,7 +1090,8 @@
         setTimeout(() => {
           gs = 'namentry';
           inputCD = 60;
-          if (nameEl) { nameEl.value = ''; nameEl.focus(); }
+          if (nameEl) { nameEl.value = ''; }
+          setNameInputActive(true);
         }, 1800);
         gs = 'gameover'; // show gameover scene briefly while audio plays
       } else {
@@ -1163,6 +1182,8 @@
     //  LEADERBOARD — FETCH & SUBMIT
     // ============================================================
     async function submitAndFetch(name) {
+      setNameInputActive(false);
+      if (nameEl) nameEl.blur();
       gs = 'submitting';
       const connected = SCRIPT_URL && !SCRIPT_URL.startsWith('PASTE');
 
@@ -1223,12 +1244,14 @@
       ctx.fillText(typed + cursor, W / 2, by + 33);
 
       ctx.fillStyle = '#888'; ctx.font = '14px Courier New';
-      ctx.fillText('Max 12 characters  —  Press ENTER to submit', W / 2, 392);
+      ctx.fillText('Max 12 characters  —  Press ENTER or tap FIRE! to submit', W / 2, 392);
+      ctx.fillStyle = '#555'; ctx.font = '13px Courier New';
+      ctx.fillText('iPhone / iPad: tap the screen to open keyboard', W / 2, 412);
 
       // Skip option
       const pulse = (tick % 30 < 15);
       ctx.fillStyle = pulse ? '#555' : '#333'; ctx.font = '13px Courier New';
-      ctx.fillText('(Press ESCAPE to skip leaderboard)', W / 2, 426);
+      ctx.fillText('(Press ESCAPE to skip leaderboard)', W / 2, 444);
     }
 
     // ============================================================
@@ -1430,16 +1453,13 @@
     // ============================================================
     nameEl = document.getElementById('name-el');
 
-    // If the hidden input loses focus during name entry, re-focus it so the
-    // mobile keyboard stays open. A short delay avoids fighting the browser.
+    // If the keyboard is dismissed (e.g. user swipes it away), re-focus on next tap.
+    // The input overlay covers the canvas during namentry, so any canvas tap hits the input
+    // directly — iOS opens the keyboard from that real touch gesture.
+    // The setTimeout re-focus handles Android/desktop where focus() from async is allowed.
     nameEl.addEventListener('blur', () => {
       if (gs === 'namentry') setTimeout(() => { if (gs === 'namentry') nameEl.focus(); }, 80);
     });
-
-    // Tapping the canvas/screen during name entry also restores keyboard focus
-    canvas.addEventListener('touchstart', () => {
-      if (gs === 'namentry') nameEl.focus();
-    }, { passive: true });
 
     // Mobile fire button also submits name entry
     document.getElementById('btn-fire').addEventListener('touchstart', e => {
