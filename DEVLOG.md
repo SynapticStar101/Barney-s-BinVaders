@@ -254,11 +254,308 @@ The game works on phones and tablets through:
 
 ---
 
+---
+
+## Entry 2 — Two Bugs That Caused a Completely Black Screen
+
+**What the user saw:**
+
+> *"I opened the index file and it is showing just a black screen with a yellow border, there is no game there and I cannot click on anything."*
+
+This is one of the most alarming things that can happen — the canvas border is there (CSS rendered fine) but the canvas itself is black and nothing is interactive. The cause is always the same: the JavaScript script failed to parse before it even started running.
+
+**Bug 1 — The Unicode Minus Sign**
+
+When the AI wrote the code for the UFO lights array, it used a typographic minus sign (−) instead of a regular hyphen-minus (-). These look identical on screen but are completely different characters. Unicode character U+2212 (−) is not a valid JavaScript operator. The parser hit it, couldn't make sense of it, and stopped — refusing to execute any of the script at all.
+
+```javascript
+// What was written (broken — uses Unicode minus U+2212):
+const lights = [[-−22, 7, ...]];   // ← this character is not a minus sign
+
+// What it should be (standard hyphen-minus U+002D):
+const lights = [[-22, 7, ...]];
+```
+
+**Why the whole screen goes black:** JavaScript is parsed all at once before any of it runs. One character that can't be understood means zero code runs — including the code that draws the menu screen.
+
+**Bug 2 — A Duplicate Property Overwriting Itself**
+
+Invader objects were being created with two properties both called `col`:
+
+```javascript
+{ row: r, col: c, type, pts, col: INV_DEFS[r].col }
+//                          ^^^                ^^^
+//     column index (number)      colour string (e.g. '#dd9090')
+```
+
+JavaScript doesn't error on duplicate keys — it silently keeps the last one. So every invader's `col` became a colour string like `'#dd9090'` instead of a column number. When the code tried to calculate the invader's x position using `inv.col * INV_CW`, it computed `'#dd9090' * 62` which equals `NaN`. All 55 invaders were positioned at NaN — effectively invisible, placed somewhere off-screen that doesn't exist.
+
+**The fix:** Rename the colour property to `color` throughout — in the definitions array, in the invader objects, and in all drawing code that references it. Two properties, two different names, no collision.
+
+**The lesson:**
+
+When the entire game goes black and nothing is clickable, the JavaScript never ran. Open the browser's developer console (F12 → Console tab) and look for a red error message. It will tell you exactly which line the parser choked on. Fix that line and the whole game comes back to life.
+
+---
+
+## Entry 3 — The Life Loss Bug Chain
+
+**What the user saw:**
+
+> *"When Barney gets hit and loses a life, the Level 1 indicator comes up and it looks like the level resets and the life is not decreased by 1. Check the coding loop and fix."*
+
+What looked like one bug turned out to be five separate problems interacting with each other. Each one individually caused strange behaviour. Together, they produced the confusing result the user described.
+
+### Bug 1 — `continue` Instead of `return` in the Missile Loop
+
+The invader missile update function loops through every active missile. When a missile hits Barney, it:
+1. Removes that missile from the list
+2. Calls `loseLife()`
+3. ... and then the loop tried to continue to the next item
+
+But `loseLife()` clears the entire missile list as part of the life-lost reset. The loop was now iterating over an empty (or shifted) array with its old index — accessing `undefined`. This could silently corrupt game state before anyone noticed.
+
+**Fix:** Change `continue` to `return` after calling `loseLife()`. Exit the function completely — there's no point processing more missiles when the player just died and the list has been wiped.
+
+### Bug 2 — `loseLife()` Had No Guard
+
+The `loseLife()` function could be called while the game was already in the "dead" state (player already dying). This meant a second missile hitting in the same frame could trigger a second life loss — or worse, trigger "game over" when the player still had lives remaining.
+
+**Fix:** Add a guard at the top of `loseLife()`:
+
+```javascript
+function loseLife() {
+  if (gs === 'dead' || gs === 'gameover' || gs === 'victory') return;
+  // ... rest of function
+}
+```
+
+If we're already handling a death, ignore any further calls.
+
+### Bug 3 — `nextLevel()` Could Fire During Death
+
+When all invaders are cleared, a `setTimeout(nextLevel, 900)` is queued. If the player died in those 900 milliseconds, `nextLevel()` would fire anyway — during the death animation. This triggered the Level Announcement screen mid-death, which looked like the level was resetting.
+
+**Fix:** Add a guard at the top of `nextLevel()`:
+
+```javascript
+function nextLevel() {
+  if (gs !== 'playing' && gs !== 'dead') return;
+  // ... rest of function
+}
+```
+
+Only proceed if the game is in a valid state for a new level to start.
+
+### Bug 4 — No Input Cooldown After Game Over
+
+When the last life was lost, the game state changed to `gameover`. But if the player was holding the fire/space key at the moment of death, that same keypress immediately triggered `startGame()` — restarting the game before the game over screen had even finished appearing.
+
+**Fix:** Set an input cooldown counter when entering game over state:
+
+```javascript
+inputCD = 90;  // ignore input for 90 frames (~1.5 seconds)
+```
+
+Check this counter before processing any keyboard input. It counts down each frame and input is only accepted once it reaches zero.
+
+### Bug 5 — Auto-Fire on Respawn
+
+After dying and respawning, if the player had been holding space, the `spacePrev` variable (which tracks whether space was already held on the previous frame, to prevent auto-fire) had not been updated during the death sequence. So the game thought space had just been pressed — and fired immediately on respawn.
+
+**Fix:** When transitioning from dead state back to playing, set:
+
+```javascript
+spacePrev = true;
+```
+
+This tells the edge-detection logic "space was already held" — so it won't fire until the player releases and presses again intentionally.
+
+### What Edge Detection Is
+
+The game uses edge detection to prevent the player from holding space and getting a continuous stream of bullets. The code tracks whether space was pressed on the *previous* frame (`spacePrev`). A shot only fires when space is pressed AND was not pressed last frame. This detects the "edge" — the moment it goes from up to down.
+
+---
+
+## Entry 4 — Deploying to GitHub Pages
+
+**What the user asked:**
+
+> *"I want to make this available via GitHub Pages, the repo is public and I have added pages — how do I make sure it works?"*
+
+**The problem:** The game wasn't appearing at the GitHub Pages URL despite the settings being correct.
+
+**Why:** GitHub Pages serves the files from your repository. But files that have been written or edited locally don't exist on GitHub until they're committed and pushed. The game file existed on the local computer but had never been sent to GitHub.
+
+**The fix — three commands:**
+
+```bash
+git add index.html DEVLOG.md
+git commit -m "Initial game build"
+git push
+```
+
+- `git add` — tells git which files to include in the next snapshot
+- `git commit` — creates the snapshot with a description of what changed
+- `git push` — sends the snapshot to GitHub
+
+After pushing, GitHub Pages automatically rebuilds the site. It takes 1–2 minutes. The game then appears at the Pages URL.
+
+**Version numbers:** Adding a version number to the menu screen (e.g. "v1.1") makes it easy to confirm the latest version is live. If the number on screen matches what you just deployed, you're seeing the new version. If it still shows an old number, either GitHub hasn't finished deploying yet, or the browser has cached the old page — a hard refresh (Ctrl+Shift+R) fixes this.
+
+---
+
+## Entry 5 — Choosing a Leaderboard: Why Google Sheets
+
+**What the user asked:**
+
+> *"I need to create a universal high score table but can't use free Supabase as I have reached my limit. What other options do I have for free?"*
+
+The previous games used Supabase (a free database service), but the free tier only allows a limited number of projects. Options considered:
+
+| Option | Cost | Account needed | Complexity |
+|--------|------|----------------|------------|
+| Supabase | Free (but limit reached) | Yes (limit hit) | Low |
+| Firebase | Free tier | New Google project | Medium |
+| Dreamlo | Free | Yes (new) | Low |
+| **Google Sheets + Apps Script** | **Free forever** | **Uses existing Google account** | **Low** |
+| Neon / PlanetScale | Free tier | New account | Medium |
+
+**Why Google Sheets won:**
+- No new account needed — uses the existing Google account
+- The data is visible as a normal spreadsheet (easy to see who's playing)
+- Google Apps Script is free forever with no project limits
+- No database configuration — the spreadsheet *is* the database
+
+**Is it safe if other people are playing?**
+
+Yes. The Apps Script acts as a secure gateway between the game and the spreadsheet. Players never have direct access to the spreadsheet — they can only submit a name/score through the game's specific API endpoint. The script sanitises all inputs (strips invalid characters, caps name length at 12, caps score at 999999). The spreadsheet itself remains private — only the owner can see the raw data.
+
+**Will the leaderboard look the same?**
+
+Yes. The leaderboard screen in the game is drawn on canvas by the game's own code. It looks identical regardless of whether the data came from Supabase, Google Sheets, or any other source. The source is invisible to the player.
+
+---
+
+## Entry 6 — Building the Google Sheets Leaderboard
+
+**What was built:**
+
+A two-part system:
+1. **Google Apps Script** — a small piece of server-side code that runs on Google's servers, receives scores from the game, and reads/writes to a Google Spreadsheet
+2. **Game-side code** — new states and functions in `index.html` that handle name entry, score submission, and displaying the top 10
+
+### How the Data Flows
+
+```
+Player finishes game
+       ↓
+Name entry screen (canvas-drawn, hidden input captures keyboard)
+       ↓
+Game sends score to Google Apps Script (POST request)
+       ↓
+Apps Script writes name/score/level/date to spreadsheet row
+       ↓
+Game waits 1.8 seconds (time for the sheet to save)
+       ↓
+Game fetches top 10 from Apps Script (GET request)
+       ↓
+Apps Script reads sheet, sorts by score descending, returns top 10 as JSON
+       ↓
+Game draws leaderboard screen on canvas
+```
+
+### The CORS Problem and How It Was Solved
+
+When a web page sends data to a different server (cross-origin), the browser first sends a "preflight" request (OPTIONS method) asking "is this allowed?" Google Apps Script doesn't respond to OPTIONS requests, so the browser rejects the request before it's even sent.
+
+**The solution:** Use `mode: 'no-cors'` for the POST (score submission):
+
+```javascript
+fetch(SCRIPT_URL, {
+  method: 'POST',
+  mode: 'no-cors',
+  body: JSON.stringify({ name, score, level })
+});
+```
+
+With `no-cors`, the browser sends the data without waiting for permission. The downside: you can't read the response. That's fine — for score submission, we just need the data to arrive; we don't need confirmation.
+
+For the GET request (fetching top 10), no-cors isn't needed because GET requests don't trigger preflight. The leaderboard data comes back as normal JSON.
+
+### Mobile Name Entry — The Hidden Input Trick
+
+The game is drawn on a `<canvas>` element. Canvas doesn't support text input natively, and calling `canvas.focus()` on mobile doesn't bring up the keyboard. To capture the player's name on mobile:
+
+A hidden `<input>` element exists in the HTML (2×2 pixels, 1% opacity, pointer-events disabled — invisible and untouchable):
+
+```html
+<input id="name-el" type="text" maxlength="12"
+  autocomplete="off" autocorrect="off" autocapitalize="characters"
+  style="position:fixed;opacity:0.01;pointer-events:none;
+         top:0;left:0;width:2px;height:2px;">
+```
+
+When name entry starts, `nameEl.focus()` is called. On mobile, focusing any input element brings up the native keyboard. The player types on the keyboard, the input captures the keystrokes, and the game reads `nameEl.value` each frame to display what's been typed on the canvas.
+
+### New Game States Added
+
+The game state machine gained three new states:
+
+| State | What's Happening |
+|-------|-----------------|
+| `namentry` | Player is typing their name after game over |
+| `submitting` | Score is being sent; leaderboard is loading |
+| `leaderboard` | Top 10 is displayed; press any key to play again |
+
+### Step-by-Step Setup Guide
+
+To connect the leaderboard to a new Google Sheet:
+
+1. Go to [Google Sheets](https://sheets.google.com) and create a new blank spreadsheet
+2. In Row 1 (header), enter: `Name` | `Score` | `Level` | `Date`
+3. Go to **Extensions → Apps Script**
+4. Delete all existing code, paste in the contents of `APPS_SCRIPT.gs`
+5. Click **Deploy → New deployment**
+6. Set type to **Web App**
+7. Set "Execute as" to **Me**
+8. Set "Who has access" to **Anyone**
+9. Click **Deploy** and authorise when prompted
+10. Copy the deployment URL
+11. Paste the URL into `index.html` as the value of `SCRIPT_URL`
+
+---
+
+## Entry 7 — The Broken String Bug (Black Screen Returns)
+
+**What the user saw:**
+
+> *"It looks like a previous bug of just the yellow box has returned — check to see what the error is."*
+
+The black-screen-yellow-border symptom appeared again. This time the cause was in how the Google Apps Script URL was pasted into the code. The URL ended up split across two lines inside a single-quoted string:
+
+```javascript
+// How it ended up in the file (broken):
+const SCRIPT_URL = 'https://script.google.com/.../exec
+    ';
+```
+
+In JavaScript, you cannot have a literal newline inside a single-quoted or double-quoted string. The parser hits the line break, considers the string ended (without a closing quote), and immediately throws a SyntaxError. Entire script fails. Black screen.
+
+**The fix:** Put the opening quote, the full URL, and the closing quote all on one line:
+
+```javascript
+// Correct:
+const SCRIPT_URL = 'https://script.google.com/.../exec';
+```
+
+**The lesson:** String literals in JavaScript must start and end on the same line (unless you use template literals with backticks, or explicitly escape the newline with `\`). When pasting long URLs into code, make sure no line break sneaks in. The browser console (F12) will show a `SyntaxError: Invalid or unexpected token` error pointing to the exact line if this happens.
+
+---
+
 ## What Comes Next (Future Improvements)
 
 Potential additions for future sessions:
-- Global leaderboard (Supabase integration — same as BinDaRoids)
-- High score name entry
 - Difficulty selection on menu
 - More invader animation frames
 - Shield flicker effect on barrier damage
