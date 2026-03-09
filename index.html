@@ -135,12 +135,14 @@
     canvas.height = H;
 
     function resize() {
-      const s = Math.min(window.innerWidth / W, (window.innerHeight - 90) / H);
+      const vvh = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+      const s = Math.min(window.innerWidth / W, (vvh - 90) / H);
       canvas.style.width = Math.floor(W * s) + 'px';
       canvas.style.height = Math.floor(H * s) + 'px';
     }
     resize();
     window.addEventListener('resize', resize);
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 
     // --- CONSTANTS ---
     const COLS = 11;
@@ -1427,6 +1429,17 @@
     //  GO!
     // ============================================================
     nameEl = document.getElementById('name-el');
+
+    // If the hidden input loses focus during name entry, re-focus it so the
+    // mobile keyboard stays open. A short delay avoids fighting the browser.
+    nameEl.addEventListener('blur', () => {
+      if (gs === 'namentry') setTimeout(() => { if (gs === 'namentry') nameEl.focus(); }, 80);
+    });
+
+    // Tapping the canvas/screen during name entry also restores keyboard focus
+    canvas.addEventListener('touchstart', () => {
+      if (gs === 'namentry') nameEl.focus();
+    }, { passive: true });
 
     // Mobile fire button also submits name entry
     document.getElementById('btn-fire').addEventListener('touchstart', e => {
