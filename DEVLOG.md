@@ -648,6 +648,70 @@ if (window.visualViewport) window.visualViewport.addEventListener('resize', resi
 
 ---
 
+## Entry 10 — iPhone Keyboard Not Opening at All
+
+**What the user saw:**
+
+> *"Looks like Apple phones can't type in the leaderboard."*
+
+On iPhones, reaching the name entry screen after game over showed the input box but the keyboard never appeared. The player had no way to type their name.
+
+**Why Android worked but iOS didn't:**
+
+Both platforms use the same trick of a hidden `<input>` element to capture keyboard input. The code called `.focus()` on that input when name entry started — on Android, this opens the keyboard. On iOS Safari, it doesn't.
+
+The reason is a security rule enforced by iOS Safari: **the keyboard only opens if `.focus()` is called directly inside a user gesture handler** (a `touchstart`, `touchend`, or `click` event). If `.focus()` is called from anywhere else — a `setTimeout`, a `Promise` callback, an `async` function — iOS ignores it completely and the keyboard never appears.
+
+The name entry starts 1.8 seconds after the final death, inside a `setTimeout`:
+
+```javascript
+// This works on Android. iOS ignores the .focus() call — wrong context.
+setTimeout(() => {
+  gs = 'namentry';
+  if (nameEl) { nameEl.value = ''; nameEl.focus(); }
+}, 1800);
+```
+
+There is no way to call `.focus()` from inside a `setTimeout` and have it open the keyboard on iOS. The only option is to restructure the code so the keyboard opens in response to an actual tap.
+
+**The fix — transparent input overlay:**
+
+The hidden input is normally 2×2 pixels with `pointer-events: none` — invisible and untouchable. During name entry, a new function `setNameInputActive(true)` expands it to cover the entire canvas area and enables touch events:
+
+```javascript
+function setNameInputActive(active) {
+  if (!nameEl) return;
+  if (active) {
+    nameEl.style.width = '100%';
+    nameEl.style.height = 'calc(100% - 100px)'; // leaves room for mobile buttons below
+    nameEl.style.pointerEvents = 'auto';
+    nameEl.focus(); // opens keyboard on Android/desktop; iOS needs a tap
+  } else {
+    nameEl.style.width = '2px';
+    nameEl.style.height = '2px';
+    nameEl.style.pointerEvents = 'none';
+  }
+}
+```
+
+Now the input is a transparent layer on top of the canvas. When the player taps anywhere on the canvas, they are tapping the input directly — that IS a user gesture. iOS opens the keyboard from that real touch.
+
+The canvas still renders normally underneath. The input is 1% opacity so it's invisible. The game drawing and the input capturing coexist without conflict.
+
+When the player submits their name or starts a new game, `setNameInputActive(false)` shrinks the input back to 2×2 and disables pointer events, so normal game touch controls work again.
+
+An on-screen hint was added to the name entry screen:
+
+```
+iPhone / iPad: tap the screen to open keyboard
+```
+
+**The lesson:**
+
+iOS Safari's keyboard security rule — "focus must come from a user gesture" — is non-negotiable and cannot be worked around with clever timing. The solution is to stop trying to open the keyboard programmatically and instead create the conditions for the user to open it themselves with a real tap. A transparent input overlay that covers the tap area is the standard technique for this.
+
+---
+
 ## What Comes Next (Future Improvements)
 
 Potential additions for future sessions:
