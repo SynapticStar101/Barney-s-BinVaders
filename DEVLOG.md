@@ -553,6 +553,101 @@ const SCRIPT_URL = 'https://script.google.com/.../exec';
 
 ---
 
+## Entry 8 — Mobile Keyboard Staying Open After Name Entry
+
+**What the user saw:**
+
+After typing a name on the leaderboard screen and starting a new game, the mobile soft keyboard stayed open. It covered part of the game screen and intercepted touch inputs — the movement buttons were being grabbed by the keyboard instead of the game.
+
+**Why it happened:**
+
+The hidden `<input>` element that captures the player's name was given `.focus()` when name entry started — this is what opens the keyboard. But when `startGame()` was called to restart, nothing told the browser to close the keyboard. The input kept its focus, the keyboard stayed open, and the game started in a state where touches were split between the game buttons and the keyboard.
+
+**The fix:**
+
+One line added at the top of `startGame()`:
+
+```javascript
+function startGame() {
+  if (nameEl) nameEl.blur();   // dismiss mobile keyboard
+  score = 0; lives = 3; level = 1;
+  initLevel();
+}
+```
+
+`.blur()` is the opposite of `.focus()`. Removing focus from the input tells the mobile OS there's nothing to type into — the keyboard closes automatically.
+
+**The lesson:**
+
+On mobile, whatever you `.focus()` to open the keyboard, you must `.blur()` to close it. The browser won't close it on its own just because the game state changed — it has no idea the game has moved on. Explicit blur at the right moment is the only reliable way to dismiss the keyboard.
+
+---
+
+## Entry 9 — Two More Mobile Keyboard Issues
+
+**What the user saw:**
+
+> *"Keyboard input still has issues — if the keyboard loses focus whilst inputting name you cannot get it back up. Also the keyboard obscures the input name screen when in landscape mode."*
+
+Two separate problems, both rooted in the same area of the code.
+
+### Problem 1 — Keyboard Disappears and Can't Be Restored
+
+If the player accidentally tapped somewhere outside the keyboard area during name entry, the hidden input lost focus. The keyboard closed. There was no way to bring it back — the game was stuck on the name entry screen with no way to type.
+
+**Why:** The hidden input was focused once (when name entry started) and nothing watched for it losing focus again. A stray tap was enough to permanently dismiss the keyboard.
+
+**The fix — two parts:**
+
+**Part A:** Listen for the input's own `blur` event and re-focus it if the game is still in name-entry state:
+
+```javascript
+nameEl.addEventListener('blur', () => {
+  if (gs === 'namentry') {
+    setTimeout(() => { if (gs === 'namentry') nameEl.focus(); }, 80);
+  }
+});
+```
+
+The 80ms delay matters. If you call `.focus()` synchronously inside a `blur` handler, some browsers interpret it as a loop and refuse to do it. The short delay lets the blur event finish, then re-focuses cleanly.
+
+**Part B:** Tapping the canvas also restores focus:
+
+```javascript
+canvas.addEventListener('touchstart', () => {
+  if (gs === 'namentry') nameEl.focus();
+}, { passive: true });
+```
+
+So even if focus is lost, a tap anywhere on the game canvas brings the keyboard back.
+
+### Problem 2 — Keyboard Covers the Name Entry Screen in Landscape
+
+On a phone held sideways (landscape), the screen is wide but short. The soft keyboard takes up roughly half the vertical space. The game canvas was sized to fit the full screen height, so the bottom half — including the name entry text box — was hidden behind the keyboard.
+
+**Why:** The resize function was using `window.innerHeight` to calculate how large the canvas should be. But `window.innerHeight` doesn't change when the keyboard opens on iOS — it reflects the full physical screen height, ignoring the keyboard entirely.
+
+**The fix — use `visualViewport.height` instead:**
+
+```javascript
+function resize() {
+  const vvh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  const s = Math.min(window.innerWidth / W, (vvh - 90) / H);
+  canvas.style.width  = Math.floor(W * s) + 'px';
+  canvas.style.height = Math.floor(H * s) + 'px';
+}
+
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
+```
+
+`visualViewport` is a browser API that reports the rectangle that is actually visible to the user — it shrinks when the keyboard opens. By listening to its `resize` event, the canvas immediately recalculates its size whenever the keyboard appears or disappears. In landscape with the keyboard open, the canvas scales down to fit the visible space above the keyboard, keeping the name entry area on screen.
+
+**The lesson:**
+
+`window.innerHeight` lies on mobile — it doesn't account for the keyboard. `visualViewport.height` tells the truth. For any layout that needs to stay visible when the keyboard is open, always use `visualViewport` if it's available.
+
+---
+
 ## What Comes Next (Future Improvements)
 
 Potential additions for future sessions:
