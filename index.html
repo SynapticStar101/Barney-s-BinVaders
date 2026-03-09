@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Barney's BinVaders!</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100svh;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+      touch-action: none;
+    }
+    #wrap {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+    }
+    canvas {
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      border: 3px solid #FFD700;
+      box-shadow: 0 0 24px rgba(255,215,0,0.4);
+    }
+    #mobile-controls {
+      display: none;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      max-width: 800px;
+      padding: 8px 12px;
+      gap: 8px;
+    }
+    @media (pointer: coarse), (max-width: 700px) {
+      #mobile-controls { display: flex; }
+    }
+    .mbtn {
+      background: rgba(255,215,0,0.1);
+      border: 2px solid #FFD700;
+      color: #FFD700;
+      font-family: 'Courier New', monospace;
+      font-size: 20px;
+      font-weight: bold;
+      border-radius: 10px;
+      padding: 14px 24px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+      flex: 1;
+    }
+    #btn-fire {
+      background: rgba(255,50,0,0.15);
+      border-color: #ff4400;
+      color: #ff4400;
+      font-size: 16px;
+      flex: 1.4;
+    }
+    .mbtn:active { filter: brightness(1.5); }
+    .scanlines {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: repeating-linear-gradient(
+        0deg, transparent, transparent 2px,
+        rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px
+      );
+      pointer-events: none;
+      z-index: 20;
+    }
+  </style>
+</head>
+<body>
+<div class="scanlines"></div>
+<div id="wrap">
+  <canvas id="gc"></canvas>
+  <div id="mobile-controls">
+    <button class="mbtn" id="btn-left">&#9664;&#9664; LEFT</button>
+    <button class="mbtn" id="btn-fire">&#128299; FIRE!</button>
+    <button class="mbtn" id="btn-right">RIGHT &#9654;&#9654;</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+// ============================================================
+//  BARNEY'S BINVADERS  v1.0
+//  Classic Space Invaders — Barney's Bins rubbish aesthetic
+//  Single HTML file. Zero assets. All graphics & audio in code.
+// ============================================================
+
+// --- CANVAS ---
+const canvas = document.getElementById('gc');
+const ctx    = canvas.getContext('2d');
+const W = 800, H = 640;
+canvas.width  = W;
+canvas.height = H;
+
+function resize() {
+  const s = Math.min(window.innerWidth / W, (window.innerHeight - 90) / H);
+  canvas.style.width  = Math.floor(W * s) + 'px';
+  canvas.style.height = Math.floor(H * s) + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// --- CONSTANTS ---
+const COLS        = 11;
+const ROWS        = 5;
+const INV_CW      = 62;   // column width
+const INV_RH      = 46;   // row height
+const INV_HW      = 19;   // invader half-width (hitbox)
+const INV_HH      = 15;   // invader half-height (hitbox)
+const INV_DROP    = 20;   // pixels dropped on wall hit
+const INV_STEP    = 10;   // pixels per step
+const WALL_L      = 14;
+const WALL_R      = W - 14;
+const GRID_LEFT   = Math.round((W - (COLS - 1) * INV_CW) / 2); // = 90
+const INV_START_Y = 95;
+const PLAYER_Y    = H - 68;
+const PLAYER_W    = 72;
+const PLAYER_H    = 34;
+const PLAYER_SPD  = 5;
+const P_MSL_SPD   = 13;
+const I_MSL_SPD   = 3.2;
+const UFO_SPD     = 1.8;
+const UFO_SCORE   = 700;
+const NUM_BARRIERS = 4;
+const BARRIER_Y   = H - 148;
+const BAR_PW      = 8;   // barrier pixel width
+const BAR_PH      = 8;   // barrier pixel height
+
+// Invader definitions per row (row 0 = top = most points)
+const INV_DEFS = [
+  { type:'rat',      pts:50, color:'#dd9090' },
+  { type:'rubbish',  pts:40, color:'#907550' },
+  { type:'blackbag', pts:30, color:'#666' },
+  { type:'wheelie',  pts:20, color:'#2a8030' },
+  { type:'barrel',   pts:10, color:'#8a4515' },
+];
+
+// Classic bunker pixel map (11 cols x 8 rows)
+const BMAP = [
+  [0,0,1,1,1,1,1,1,1,0,0],
+  [0,1,1,1,1,1,1,1,1,1,0],
+  [1,1,1,1,1,1,1,1,1,1,1],
+  [1,1,1,1,1,1,1,1,1,1,1],
+  [1,1,1,1,1,1,1,1,1,1,1],
+  [1,1,1,1,1,1,1,1,1,1,1],
+  [1,1,0,0,0,0,0,0,0,1,1],
+  [1,1,0,0,0,0,0,0,0,1,1],
+];
+const BMAP_W = 11, BMAP_H = 8;
+const BAR_W = BMAP_W * BAR_PW;   // 88
+const BAR_H = BMAP_H * BAR_PH;   // 64
+
+// ============================================================
+//  AUDIO ENGINE (Web Audio API — zero audio files)
+// ============================================================
+let AC = null;
+function getAC() {
+  if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+  return AC;
+}
+function tone(freq, type='square', dur=0.1, vol=0.3, delay=0) {
+  try {
+    const a = getAC();
+    const o = a.createOscillator();
+    const g = a.createGain();
+    o.connect(g); g.connect(a.destination);
+    o.type = type; o.frequency.value = freq;
+    const t = a.currentTime + delay;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.start(t); o.stop(t + dur + 0.01);
+  } catch(e) {}
+}
+function noise(dur=0.2, vol=0.4, delay=0) {
+  try {
+    const a = getAC();
+    const n = ~~(a.sampleRate * dur);
+    const buf = a.createBuffer(1, n, a.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = a.createBufferSource(); src.buffer = buf;
+    const g = a.createGain();
+    src.connect(g); g.connect(a.destination);
+    const t = a.currentTime + delay;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.start(t);
+  } catch(e) {}
+}
+
+const sfx = {
+  shoot:    () => { tone(900,'square',0.07,0.22); tone(500,'square',0.07,0.14,0.04); },
+  iShoot:   () => { tone(180,'sawtooth',0.13,0.14); tone(90,'sawtooth',0.13,0.10,0.07); },
+  explode:  (big) => { noise(big?0.35:0.2, big?0.6:0.45); tone(big?55:70,'sawtooth',big?0.35:0.2,0.25); },
+  ufoHum:   () => { tone(540,'sine',0.09,0.13); tone(460,'sine',0.09,0.10,0.11); },
+  ufoBlast: () => { noise(0.3,0.65); tone(900,'square',0.08,0.45); tone(450,'square',0.18,0.30,0.09); },
+  lifeLost: () => {
+    tone(370,'square',0.28,0.45); tone(260,'square',0.28,0.40,0.28);
+    tone(140,'square',0.5,0.50,0.55); noise(0.28,0.30,0.52);
+  },
+  march: (b) => {
+    const f=[145,115,130,115]; tone(f[b%4],'square',0.07,0.17);
+  },
+  fanfare: () => {
+    [[523,0],[659,0.13],[784,0.26],[1047,0.39],[784,0.56],[1047,0.70],[1319,0.84],[1047,1.02]]
+      .forEach(([f,d]) => tone(f,'square',0.17,0.44,d));
+  },
+  gameOver: () => {
+    [[440,0],[392,0.28],[349,0.56],[294,0.85],[220,1.2]]
+      .forEach(([f,d]) => tone(f,'sawtooth',0.32,0.50,d));
+  },
+  victory: () => {
+    [[523,0],[659,0.11],[784,0.22],[1047,0.33],[1319,0.44],[1568,0.55],[2093,0.66]]
+      .forEach(([f,d]) => tone(f,'square',0.18,0.48,d));
+    [[784,1.1],[1047,1.4],[1319,1.7]].forEach(([f,d]) => tone(f,'square',0.28,0.55,d));
+  },
+};
+
+// ============================================================
+//  GAME STATE
+// ============================================================
+let gs       = 'menu';  // menu | announce | playing | dead | gameover | victory
+let score    = 0;
+let hiScore  = +(localStorage.getItem('bv_hi') || 0);
+let lives    = 3;
+let level    = 1;
+let tick     = 0;
+
+// Player
+let px = W / 2 - PLAYER_W / 2;
+
+// Player missile
+let pm = null;         // { x, y } or null
+
+// Invader missiles
+let ims = [];          // [{ x, y, shape, phase }]
+
+// Invader grid
+let invs     = [];
+let gx       = 0, gy = 0;   // grid offset
+let gdx      = 1;            // direction
+let invAnim  = 0;            // 0|1, flips on each step
+let marchBeat = 0;
+let stepT    = 0;
+let stepI    = 55;
+let fireT    = 0;
+
+// UFO
+let ufo      = null;   // { x, dx } or null
+let ufoT     = 0;
+let ufoNext  = nextUFOTime();
+
+// Barriers
+let barriers = [];
+
+// Particles & popups
+let parts    = [];
+let pops     = [];
+
+// Announce / dead timers
+let annT     = 0;
+let deadT    = 0;
+let inputCD  = 0;  // cooldown frames before input is accepted again
+
+// Input
+let K        = {};
+let tL = false, tR = false, tF = false;
+let spacePrev = false;
+
+// Stars (static background)
+const STARS = Array.from({length: 90}, () => ({
+  x: Math.random() * W,
+  y: Math.random() * H,
+  s: 0.6 + Math.random() * 1.6,
+  b: Math.random()
+}));
+
+// ============================================================
+//  INVADER POSITION HELPER
+// ============================================================
+function invX(inv) { return GRID_LEFT + gx + inv.col * INV_CW; }
+function invY(inv) { return INV_START_Y + gy + inv.row * INV_RH; }
+
+// ============================================================
+//  DRAWING: INVADERS  (each drawn centred at 0,0 after translate)
+// ============================================================
+function drawInvader(inv) {
+  ctx.save();
+  ctx.translate(invX(inv), invY(inv));
+  const a = invAnim;
+  switch (inv.type) {
+    case 'rat':      dRat(a, inv.color);      break;
+    case 'rubbish':  dRubbish(a, inv.color);  break;
+    case 'blackbag': dBlackBag(a, inv.color); break;
+    case 'wheelie':  dWheelie(a, inv.color);  break;
+    case 'barrel':   dBarrel(a, inv.color);   break;
+  }
+  ctx.restore();
+}
+
+function dRat(a, col) {
+  // Body
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.ellipse(0, 3, 14, 9, 0, 0, Math.PI*2); ctx.fill();
+  // Ears
+  ctx.beginPath(); ctx.ellipse(-11,-6, 5,4,-0.3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 11,-6, 5,4, 0.3,0,Math.PI*2); ctx.fill();
+  // Tail
+  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.beginPath();
+  ctx.moveTo(13,4);
+  if (a===0) ctx.quadraticCurveTo(22,-3,19,9);
+  else        ctx.quadraticCurveTo(22,10,18,2);
+  ctx.stroke();
+  // Eyes
+  ctx.fillStyle='#ff2222'; ctx.fillRect(-6,-1,3,3); ctx.fillRect(3,-1,3,3);
+  // Nose
+  ctx.fillStyle='#ffaaaa'; ctx.fillRect(-2,4,3,2);
+  // Whiskers
+  ctx.strokeStyle='#ccaaaa'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(-13,2); ctx.lineTo(-4,3); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( 13,2); ctx.lineTo( 4,3); ctx.stroke();
+}
+
+function dRubbish(a, col) {
+  ctx.fillStyle = col;
+  // Pile shape
+  ctx.beginPath();
+  ctx.moveTo(-16,12); ctx.lineTo(-14,-2); ctx.lineTo(-8,-10);
+  ctx.lineTo(0,-13); ctx.lineTo(8,-10); ctx.lineTo(14,-2);
+  ctx.lineTo(16,12); ctx.closePath(); ctx.fill();
+  // Bits of rubbish
+  ctx.fillStyle='#6a6050'; ctx.fillRect(-8,-6,6,5);
+  ctx.fillStyle='#aaa';    ctx.fillRect(2,-8,5,4);
+  ctx.fillStyle='#887766'; ctx.fillRect(-3,a===0?-13:-14, 5,5);
+  ctx.fillStyle='#cc4444'; // red can
+  ctx.fillRect(6,-4,4,7);
+  ctx.fillStyle='#ffdd00'; ctx.fillRect(6,-4,4,2); // can top
+}
+
+function dBlackBag(a, col) {
+  // Bag body
+  ctx.fillStyle='#1e1e1e';
+  ctx.beginPath();
+  ctx.moveTo(-11,12);
+  ctx.bezierCurveTo(-15,-2,-15,-10,0,-14);
+  ctx.bezierCurveTo(15,-10,15,-2,11,12);
+  ctx.closePath(); ctx.fill();
+  // Tie
+  ctx.fillStyle='#444';
+  ctx.beginPath(); ctx.ellipse(0,-14,4,2,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#555'; ctx.fillRect(-2,-18,4,5);
+  // Shine (animated)
+  ctx.fillStyle = a===0 ? '#2a2a2a' : '#333';
+  ctx.beginPath(); ctx.ellipse(-4,-2,3,7,-0.3,0,Math.PI*2); ctx.fill();
+  // Legs (animated — bag sways)
+  ctx.fillStyle='#1e1e1e';
+  if (a===0) { ctx.fillRect(-9,11,4,6); ctx.fillRect(5,11,4,6); }
+  else        { ctx.fillRect(-11,10,4,6); ctx.fillRect(7,10,4,6); }
+}
+
+function dWheelie(a, col) {
+  // Bin body
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.rect(-13,-4,26,18); ctx.fill();
+  // Lid
+  ctx.fillStyle = '#1a5a1a';
+  if (a===0) {
+    ctx.fillRect(-14,-9,28,6);
+  } else {
+    ctx.save(); ctx.translate(-13,-6); ctx.rotate(0.18);
+    ctx.fillRect(0,-4,28,6); ctx.restore();
+  }
+  // Overflowing rubbish
+  ctx.fillStyle='#777'; ctx.fillRect(-7,-14,4,7);
+  ctx.fillStyle='#aaa'; ctx.fillRect(1,-12,5,6);
+  ctx.fillStyle='#888'; ctx.fillRect(-2,-16,4,5);
+  // Handle
+  ctx.strokeStyle='#1a5a1a'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(-10,-9); ctx.lineTo(-10,-16); ctx.stroke();
+  // Wheels
+  ctx.fillStyle='#111';
+  ctx.beginPath(); ctx.arc(-8,16,5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 8,16,5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#555';
+  ctx.beginPath(); ctx.arc(-8,16,2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 8,16,2,0,Math.PI*2); ctx.fill();
+}
+
+function dBarrel(a, col) {
+  // Barrel body
+  ctx.fillStyle = col;
+  ctx.fillRect(-12,-12,24,24);
+  // Metal bands
+  ctx.fillStyle='#6a3410'; ctx.fillRect(-12,-2,24,4); ctx.fillRect(-12,6,24,4);
+  // Top/bottom rims
+  ctx.fillStyle='#aa5520'; ctx.fillRect(-13,-14,26,4); ctx.fillRect(-13,12,26,4);
+  // Skull head
+  ctx.fillStyle='#ffff00';
+  ctx.beginPath(); ctx.arc(0,-2,6,0,Math.PI*2); ctx.fill();
+  // Skull jaw
+  ctx.fillRect(-4,2,8,4);
+  // Skull eye sockets (hollow)
+  ctx.fillStyle=col; ctx.fillRect(-4,-4,3,3); ctx.fillRect(1,-4,3,3);
+  // Skull nose
+  ctx.fillRect(-1,1,2,2);
+  // Skull teeth
+  ctx.fillStyle='#ffff00'; ctx.fillRect(-3,4,2,2); ctx.fillRect(0,4,2,2); ctx.fillRect(3,4,2,2);
+  // Crossbones
+  ctx.strokeStyle = a===0 ? '#ffff00' : '#ffff88';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-10,7); ctx.lineTo(10,14); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(10,7); ctx.lineTo(-10,14); ctx.stroke();
+  // Toxic drip
+  ctx.fillStyle='#aaff00';
+  ctx.fillRect(-1, a===0?12:13, 3, a===0?3:4);
+}
+
+// ============================================================
+//  DRAWING: PLAYER (Barney's Bin Wagon)
+// ============================================================
+function drawPlayer() {
+  const cx = px + PLAYER_W / 2;
+  const cy = PLAYER_Y + PLAYER_H / 2;
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // Truck body (main bin section)
+  ctx.fillStyle = '#cc5500';
+  ctx.fillRect(-36, -16, 72, 32);
+
+  // Cab
+  ctx.fillStyle = '#ff8800';
+  ctx.fillRect(-36, -18, 24, 36);
+
+  // Windscreen
+  ctx.fillStyle = '#88ccff';
+  ctx.fillRect(-34, -15, 20, 13);
+
+  // Barney's face in cab window
+  ctx.fillStyle = '#ffcc88';
+  ctx.beginPath(); ctx.arc(-24, -8, 6, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.fillRect(-27,-11,2,2); ctx.fillRect(-22,-11,2,2); // eyes
+  ctx.fillRect(-27,-6,8,1);   // mouth (smile)
+  ctx.fillStyle = '#cc8844';  // hair
+  ctx.fillRect(-30,-14,14,4);
+
+  // "BARNEY'S BINS" sign
+  ctx.fillStyle = '#FFD700';
+  ctx.fillRect(-11, -8, 46, 14);
+  ctx.fillStyle = '#000';
+  ctx.font = 'bold 6px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText("BARNEY'S", 12, -2);
+  ctx.fillText("BINS", 12, 6);
+
+  // Wheels
+  ctx.fillStyle = '#111';
+  [-26, 0, 26].forEach(wx => {
+    ctx.beginPath(); ctx.arc(wx, 20, 8, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#555';
+    ctx.beginPath(); ctx.arc(wx, 20, 3, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#111';
+  });
+
+  // Missile cannon on top
+  ctx.fillStyle = '#888';
+  ctx.fillRect(-3, -26, 6, 12);
+  ctx.fillStyle = '#aaa';
+  ctx.fillRect(-4, -28, 8, 5);
+
+  ctx.restore();
+}
+
+// ============================================================
+//  DRAWING: UFO (Pink Rat Spaceship)
+// ============================================================
+function drawUFO() {
+  if (!ufo) return;
+  const {x, y} = ufo;
+  ctx.save(); ctx.translate(x, y);
+
+  // Saucer body
+  ctx.fillStyle = '#ff69b4';
+  ctx.beginPath(); ctx.ellipse(0, 6, 34, 13, 0, 0, Math.PI*2); ctx.fill();
+
+  // Dome
+  ctx.fillStyle = '#ff1493';
+  ctx.beginPath(); ctx.ellipse(0, -1, 20, 14, 0, 0, Math.PI*2); ctx.fill();
+
+  // Rat face inside dome
+  ctx.fillStyle = '#e8a0a0';
+  ctx.beginPath(); ctx.ellipse(0, 1, 13, 9, 0, 0, Math.PI*2); ctx.fill();
+  // eyes
+  ctx.fillStyle = '#cc0000';
+  ctx.fillRect(-6,-2,3,3); ctx.fillRect(3,-2,3,3);
+  // teeth
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(-4,5,3,5); ctx.fillRect(1,5,3,5);
+  // ears (behind dome)
+  ctx.fillStyle = '#ff69b4';
+  ctx.beginPath(); ctx.ellipse(-19,-8,6,7,-0.3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 19,-8,6,7, 0.3,0,Math.PI*2); ctx.fill();
+
+  // Tail
+  ctx.strokeStyle = '#ffaaaa'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(34,6); ctx.quadraticCurveTo(48,-4,44,12); ctx.stroke();
+
+  // Blinking lights
+  const blink = (tick % 20 < 10);
+  [[-22,7,'#ffff00','#888800'],[0,9,'#00ff88','#006644'],[22,7,'#ff4400','#882200']].forEach(([lx,ly,c1,c2]) => {
+    ctx.fillStyle = blink ? c1 : c2;
+    ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI*2); ctx.fill();
+  });
+
+  // Score label on hit (shown as popup)
+  ctx.restore();
+}
+
+// ============================================================
+//  DRAWING: BARRIERS
+// ============================================================
+function makeBarrier(cx) {
+  const pix = BMAP.map(row => [...row]);
+  return { cx, y: BARRIER_Y, pix };
+}
+function barrierLeft(b) { return b.cx - BAR_W / 2; }
+
+function drawBarrier(b) {
+  const bx = barrierLeft(b);
+  ctx.fillStyle = '#00dd44';
+  for (let r = 0; r < BMAP_H; r++) {
+    for (let c = 0; c < BMAP_W; c++) {
+      if (!b.pix[r][c]) continue;
+      ctx.fillRect(bx + c * BAR_PW, b.y + r * BAR_PH, BAR_PW - 1, BAR_PH - 1);
+    }
+  }
+}
+
+// Returns true if missile (mx,my,mw,mh) overlaps barrier and destroys pixels
+function hitBarrier(b, mx, my, mw, mh) {
+  const bx = barrierLeft(b);
+  let hit = false;
+  for (let r = 0; r < BMAP_H; r++) {
+    for (let c = 0; c < BMAP_W; c++) {
+      if (!b.pix[r][c]) continue;
+      const px2 = bx + c * BAR_PW, py2 = b.y + r * BAR_PH;
+      if (overlap(mx,my,mw,mh, px2,py2,BAR_PW,BAR_PH)) {
+        hit = true;
+        b.pix[r][c] = 0;
+        if (c > 0         && Math.random()<0.55) b.pix[r][c-1] = 0;
+        if (c < BMAP_W-1  && Math.random()<0.55) b.pix[r][c+1] = 0;
+        if (r > 0         && Math.random()<0.35) b.pix[r-1][c] = 0;
+        if (r < BMAP_H-1  && Math.random()<0.55) b.pix[r+1][c] = 0;
+      }
+    }
+  }
+  return hit;
+}
+
+function overlap(ax,ay,aw,ah, bx,by,bw,bh) {
+  return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+}
+
+// ============================================================
+//  DRAWING: STARS
+// ============================================================
+function drawStars() {
+  for (const s of STARS) {
+    const tw = 0.45 + 0.55 * Math.sin(tick * 0.04 + s.b * 10);
+    ctx.fillStyle = `rgba(255,255,255,${tw.toFixed(2)})`;
+    ctx.fillRect(s.x, s.y, s.s, s.s);
+  }
+}
+
+// ============================================================
+//  DRAWING: UI BAR
+// ============================================================
+function drawUI() {
+  // Top score bar
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, 62);
+  ctx.strokeStyle = '#FFD700'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0,62); ctx.lineTo(W,62); ctx.stroke();
+
+  ctx.font = 'bold 14px Courier New'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#FFD700'; ctx.fillText('SCORE', 20, 22);
+  ctx.fillStyle = '#ffffff'; ctx.fillText(String(score).padStart(6,'0'), 20, 42);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FFD700'; ctx.fillText('HI-SCORE', W/2, 22);
+  ctx.fillStyle = '#ffffff'; ctx.fillText(String(hiScore).padStart(6,'0'), W/2, 42);
+
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#FFD700'; ctx.fillText('LEVEL', W-20, 22);
+  ctx.fillStyle = '#ffffff'; ctx.fillText(level + ' / 10', W-20, 42);
+
+  // Bottom bar
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, H-44, W, 44);
+  ctx.strokeStyle = '#FFD700';
+  ctx.beginPath(); ctx.moveTo(0,H-44); ctx.lineTo(W,H-44); ctx.stroke();
+
+  // Lives
+  ctx.fillStyle = '#FFD700'; ctx.textAlign = 'left';
+  ctx.font = 'bold 13px Courier New';
+  ctx.fillText('LIVES:', 20, H-18);
+  for (let i = 0; i < lives; i++) miniWagon(88 + i * 42, H - 22);
+
+  // Version
+  ctx.fillStyle = '#444'; ctx.textAlign = 'right'; ctx.font = '11px Courier New';
+  ctx.fillText('v1.0', W-14, H-18);
+}
+
+function miniWagon(x, y) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = '#ff8800'; ctx.fillRect(-16,-7,32,14);
+  ctx.fillStyle = '#cc5500'; ctx.fillRect(-16,-9,18,18);
+  ctx.fillStyle = '#88ccff'; ctx.fillRect(-14,-7,16,8);
+  ctx.fillStyle = '#111';
+  [-10,0,10].forEach(wx => { ctx.beginPath(); ctx.arc(wx,8,4,0,Math.PI*2); ctx.fill(); });
+  ctx.restore();
+}
+
+// ============================================================
+//  DRAWING: SCREENS
+// ============================================================
+function drawMenu() {
+  ctx.fillStyle = '#000010'; ctx.fillRect(0,0,W,H);
+  drawStars();
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 22;
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 58px Courier New';
+  ctx.fillText("BARNEY'S", W/2, 118);
+  ctx.fillStyle = '#00ff88'; ctx.font = 'bold 58px Courier New';
+  ctx.fillText('BINVADERS!', W/2, 184);
+  ctx.shadowBlur = 0;
+
+  // Score table
+  ctx.fillStyle = '#FFD700'; ctx.font = '15px Courier New';
+  ctx.fillText('= SCORE ADVANCE TABLE =', W/2, 228);
+
+  const entries = [
+    { type:'rat',      label:'RAT INVADER', pts:'50 PTS', col:'#dd9090' },
+    { type:'rubbish',  label:'RUBBISH PILE', pts:'40 PTS', col:'#907550' },
+    { type:'blackbag', label:'BLACK BAG',    pts:'30 PTS', col:'#888' },
+    { type:'wheelie',  label:'WHEELIE BIN',  pts:'20 PTS', col:'#2a8030' },
+    { type:'barrel',   label:'TOXIC BARREL', pts:'10 PTS', col:'#8a4515' },
+  ];
+
+  entries.forEach((e, i) => {
+    const ey = 262 + i * 38;
+    // Mini invader
+    const fi = { type:e.type, col:e.col, row:0, col_idx:0 };
+    ctx.save(); ctx.translate(W/2 - 170, ey);
+    switch(e.type){
+      case 'rat':      dRat(tick%40<20?0:1,e.col);      break;
+      case 'rubbish':  dRubbish(tick%40<20?0:1,e.col);  break;
+      case 'blackbag': dBlackBag(tick%40<20?0:1,e.col); break;
+      case 'wheelie':  dWheelie(tick%40<20?0:1,e.col);  break;
+      case 'barrel':   dBarrel(tick%40<20?0:1,e.col);   break;
+    }
+    ctx.restore();
+    ctx.fillStyle = e.col; ctx.textAlign = 'left'; ctx.font = '14px Courier New';
+    ctx.fillText(`= ${e.label}`, W/2 - 140, ey + 5);
+    ctx.textAlign = 'right';
+    ctx.fillText(e.pts, W/2 + 160, ey + 5);
+  });
+
+  // UFO entry
+  const uy = 462;
+  ctx.save(); ctx.translate(W/2 - 170, uy);
+  ctx.fillStyle = '#ff69b4';
+  ctx.beginPath(); ctx.ellipse(0,4,22,8,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ff1493';
+  ctx.beginPath(); ctx.ellipse(0,-1,13,9,0,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#ff69b4'; ctx.textAlign = 'left'; ctx.font = '14px Courier New';
+  ctx.fillText('= PINK RAT UFO  (??)',  W/2 - 140, uy + 5);
+  ctx.textAlign = 'right';
+  ctx.fillText('700 PTS', W/2 + 160, uy + 5);
+
+  // Press space
+  const pulse = Math.sin(tick * 0.07) > 0;
+  ctx.fillStyle = pulse ? '#fff' : '#888';
+  ctx.font = 'bold 20px Courier New'; ctx.textAlign = 'center';
+  ctx.fillText('PRESS SPACE / FIRE TO START', W/2, 524);
+
+  ctx.fillStyle = '#444'; ctx.font = '12px Courier New';
+  ctx.fillText('Arrow Keys + Space  |  Mobile Buttons Below', W/2, 556);
+}
+
+function drawAnnounce() {
+  const levelSubs = [
+    '','THE BINS ARE COMING!','RUBBISH RISING!','TOXIC TROUBLE!',
+    'RAT INVASION!','MEGA MESS!','FILTH FLOOD!','TOTAL TIPS!',
+    'MAXIMUM MESS!','EXTREME RUBBISH!','THE FINAL FILTH!'
+  ];
+  // Translucent overlay
+  ctx.fillStyle = 'rgba(0,0,16,0.86)'; ctx.fillRect(0,0,W,H);
+  // Box
+  ctx.strokeStyle = '#FFD700'; ctx.lineWidth = 4;
+  ctx.fillStyle = '#000820';
+  ctx.fillRect(160, 210, 480, 196);
+  ctx.strokeRect(160, 210, 480, 196);
+  // Level text
+  ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 18;
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 52px Courier New'; ctx.textAlign = 'center';
+  ctx.fillText('LEVEL ' + level, W/2, 282);
+  ctx.shadowBlur = 0;
+  // Subtitle
+  ctx.fillStyle = '#00ff88'; ctx.font = '20px Courier New';
+  ctx.fillText(levelSubs[Math.min(level,10)], W/2, 326);
+  // Pulse
+  ctx.fillStyle = (tick % 22 < 11) ? '#fff' : '#999';
+  ctx.font = '16px Courier New';
+  ctx.fillText('GET READY!', W/2, 370);
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.82)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 24;
+  ctx.fillStyle = '#ff2222'; ctx.font = 'bold 62px Courier New';
+  ctx.fillText('GAME OVER', W/2, 234);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#FFD700'; ctx.font = '26px Courier New';
+  ctx.fillText('FINAL SCORE: ' + score, W/2, 292);
+  if (score > 0 && score >= hiScore) {
+    ctx.fillStyle = '#00ff88'; ctx.font = '20px Courier New';
+    ctx.fillText('NEW HIGH SCORE!', W/2, 332);
+  }
+  const pulse = (tick % 22 < 11);
+  ctx.fillStyle = pulse ? '#fff' : '#888';
+  ctx.font = 'bold 20px Courier New';
+  ctx.fillText('PRESS SPACE TO PLAY AGAIN', W/2, 396);
+}
+
+function drawVictory() {
+  ctx.fillStyle = 'rgba(0,0,16,0.88)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 28;
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 56px Courier New';
+  ctx.fillText('YOU WIN!', W/2, 200);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#00ff88'; ctx.font = '26px Courier New';
+  ctx.fillText("BARNEY'S BINS ARE SAFE!", W/2, 262);
+  ctx.fillStyle = '#aaffaa'; ctx.font = '20px Courier New';
+  ctx.fillText('ALL RUBBISH DEFEATED!', W/2, 302);
+  ctx.fillStyle = '#FFD700'; ctx.font = '26px Courier New';
+  ctx.fillText('FINAL SCORE: ' + score, W/2, 352);
+  if (score > 0 && score >= hiScore) {
+    ctx.fillStyle = '#00ff88'; ctx.font = '20px Courier New';
+    ctx.fillText('NEW HIGH SCORE!', W/2, 390);
+  }
+  const pulse = (tick % 22 < 11);
+  ctx.fillStyle = pulse ? '#fff' : '#888';
+  ctx.font = 'bold 20px Courier New';
+  ctx.fillText('PRESS SPACE TO PLAY AGAIN', W/2, 454);
+}
+
+// ============================================================
+//  PARTICLES & POPUPS
+// ============================================================
+function explode(x, y, col, big) {
+  const n = big ? 16 : 10;
+  for (let i = 0; i < n; i++) {
+    const ang = (Math.PI*2*i/n) + Math.random()*0.5;
+    const spd = 1.2 + Math.random()*(big?4:2.5);
+    parts.push({ x, y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd,
+      life: 35 + ~~(Math.random()*25), max: 60, col, sz: 1.5 + Math.random()*(big?3.5:2.5) });
+  }
+}
+function popup(x, y, txt, col) {
+  pops.push({ x, y, txt, col, life: 60 });
+}
+
+// ============================================================
+//  INITIALISE
+// ============================================================
+function nextUFOTime() { return 700 + ~~(Math.random() * 800); }
+
+function initInvaders() {
+  invs = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      invs.push({ row: r, col: c, type: INV_DEFS[r].type,
+                  pts: INV_DEFS[r].pts, color: INV_DEFS[r].color, alive: true });
+  gx = 0; gy = 0; gdx = 1;
+  invAnim = 0; marchBeat = 0;
+  stepT = 0; fireT = 0;
+  updateStepI();
+}
+
+function initBarriers() {
+  barriers = [];
+  const sp = W / (NUM_BARRIERS + 1);
+  for (let i = 0; i < NUM_BARRIERS; i++)
+    barriers.push(makeBarrier(~~(sp * (i+1))));
+}
+
+function updateStepI() {
+  const alive = invs.filter(i => i.alive).length;
+  const ratio = alive / (COLS * ROWS);
+  const base  = Math.max(8, 56 - (level-1) * 5);
+  stepI = Math.max(4, Math.round(base * ratio));
+}
+
+function initLevel() {
+  initInvaders();
+  initBarriers();
+  pm  = null;
+  ims = [];
+  ufo = null; ufoT = 0; ufoNext = nextUFOTime();
+  parts = []; pops = [];
+  px = W/2 - PLAYER_W/2;
+  gs = 'announce';
+  annT = 200;
+  sfx.fanfare();
+}
+
+function startGame() {
+  score = 0; lives = 3; level = 1;
+  initLevel();
+}
+
+// ============================================================
+//  UPDATE
+// ============================================================
+function updatePlayer() {
+  const L = K['ArrowLeft']  || K['a'] || K['A'] || tL;
+  const R = K['ArrowRight'] || K['d'] || K['D'] || tR;
+  if (L) px -= PLAYER_SPD;
+  if (R) px += PLAYER_SPD;
+  px = Math.max(0, Math.min(W - PLAYER_W, px));
+
+  // Fire — only on new press
+  const spaceNow = K[' '] || K['z'] || K['Z'] || tF;
+  if (spaceNow && !spacePrev && !pm) {
+    pm = { x: px + PLAYER_W/2 - 2, y: PLAYER_Y - 4, w: 4, h: 14 };
+    sfx.shoot();
+  }
+  spacePrev = spaceNow;
+}
+
+function updatePlayerMissile() {
+  if (!pm) return;
+  pm.y -= P_MSL_SPD;
+  if (pm.y + pm.h < 66) { pm = null; return; }
+
+  // Hit UFO
+  if (ufo && overlap(pm.x,pm.y,pm.w,pm.h, ufo.x-36,ufo.y-16,72,26)) {
+    score += UFO_SCORE;
+    popup(ufo.x, ufo.y - 20, '+700!', '#ff69b4');
+    explode(ufo.x, ufo.y, '#ff69b4', true);
+    sfx.ufoBlast();
+    ufo = null; pm = null;
+    if (score > hiScore) hiScore = score;
+    return;
+  }
+
+  // Hit invader
+  for (const inv of invs) {
+    if (!inv.alive) continue;
+    const ix = invX(inv), iy = invY(inv);
+    if (overlap(pm.x,pm.y,pm.w,pm.h, ix-INV_HW,iy-INV_HH,INV_HW*2,INV_HH*2)) {
+      inv.alive = false;
+      score += inv.pts;
+      if (score > hiScore) hiScore = score;
+      popup(ix, iy, '+'+inv.pts, '#ffff00');
+      explode(ix, iy, inv.color, false);
+      sfx.explode(false);
+      pm = null;
+      updateStepI();
+      if (invs.every(i => !i.alive)) setTimeout(nextLevel, 900);
+      return;
+    }
+  }
+
+  // Hit barrier
+  for (const b of barriers) {
+    if (hitBarrier(b, pm.x, pm.y, pm.w, pm.h)) { pm = null; return; }
+  }
+}
+
+function updateInvaders() {
+  stepT++;
+  if (stepT < stepI) return;
+  stepT = 0;
+  invAnim = 1 - invAnim;
+  sfx.march(marchBeat++);
+
+  // Move grid
+  gx += INV_STEP * gdx;
+
+  // Find live bounds
+  let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const inv of invs) {
+    if (!inv.alive) continue;
+    const ix = invX(inv);
+    if (ix - INV_HW < minX) minX = ix - INV_HW;
+    if (ix + INV_HW > maxX) maxX = ix + INV_HW;
+    const iy = invY(inv);
+    if (iy > maxY) maxY = iy;
+  }
+
+  if (minX < WALL_L || maxX > WALL_R) {
+    gdx = -gdx;
+    gy += INV_DROP;
+
+    // Check if invaders have reached player line
+    if (maxY + INV_HH + INV_DROP >= PLAYER_Y) {
+      loseLife(); return;
+    }
+  }
+}
+
+function updateInvaderFire() {
+  fireT++;
+  const interval = Math.max(16, 78 - (level-1) * 7);
+  if (fireT < interval) return;
+  fireT = 0;
+
+  // Only fire if fewer than (level + 2) missiles already on screen
+  if (ims.length >= level + 2) return;
+
+  // Bottom-most alive in a random column
+  const cols = [];
+  for (let c = 0; c < COLS; c++) {
+    let bot = null;
+    for (let r = ROWS-1; r >= 0; r--) {
+      const inv = invs.find(i => i.col===c && i.row===r && i.alive);
+      if (inv) { bot = inv; break; }
+    }
+    if (bot) cols.push(bot);
+  }
+  if (!cols.length) return;
+  const shooter = cols[~~(Math.random() * cols.length)];
+  ims.push({
+    x: invX(shooter) - 2, y: invY(shooter) + INV_HH + 2,
+    w: 4, h: 12,
+    shape: ~~(Math.random() * 2),
+    phase: 0
+  });
+  sfx.iShoot();
+}
+
+function updateInvaderMissiles() {
+  for (let i = ims.length-1; i >= 0; i--) {
+    const m = ims[i];
+    m.y += I_MSL_SPD;
+    m.phase++;
+
+    if (m.y > H - 44) { ims.splice(i,1); continue; }
+
+    // Hit player
+    if (overlap(m.x,m.y,m.w,m.h, px+8,PLAYER_Y,PLAYER_W-16,PLAYER_H)) {
+      ims.splice(i,1);
+      loseLife(); return; // exit function — loseLife clears ims anyway
+    }
+
+    // Hit barrier
+    let bHit = false;
+    for (const b of barriers) {
+      if (hitBarrier(b, m.x, m.y, m.w, m.h)) { bHit = true; break; }
+    }
+    if (bHit) { ims.splice(i,1); continue; }
+  }
+}
+
+function updateUFO() {
+  ufoT++;
+  if (!ufo) {
+    if (ufoT >= ufoNext) {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      ufo = { x: dir===1 ? -44 : W+44, y: 80, dx: UFO_SPD * dir };
+      ufoT = 0; ufoNext = nextUFOTime();
+    }
+  } else {
+    ufo.x += ufo.dx;
+    if (tick % 10 === 0) sfx.ufoHum();
+    if (ufo.x < -80 || ufo.x > W+80) ufo = null;
+  }
+}
+
+function updateParticles() {
+  for (let i = parts.length-1; i >= 0; i--) {
+    const p = parts[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.04; // slight gravity
+    p.life--;
+    if (p.life <= 0) parts.splice(i,1);
+  }
+}
+
+function updatePopups() {
+  for (let i = pops.length-1; i >= 0; i--) {
+    pops[i].y -= 0.8; pops[i].life--;
+    if (pops[i].life <= 0) pops.splice(i,1);
+  }
+}
+
+// ============================================================
+//  LOSE LIFE / NEXT LEVEL
+// ============================================================
+function loseLife() {
+  // Guard: ignore if already in a death/end state
+  if (gs === 'dead' || gs === 'gameover' || gs === 'victory') return;
+  lives--;
+  sfx.lifeLost();
+  explode(px + PLAYER_W/2, PLAYER_Y + PLAYER_H/2, '#ff8800', true);
+  pm = null; ims = [];
+  if (lives <= 0) {
+    if (score > hiScore) { hiScore = score; localStorage.setItem('bv_hi', hiScore); }
+    gs = 'gameover'; inputCD = 90; sfx.gameOver();
+  } else {
+    gs = 'dead'; deadT = 140;
+  }
+}
+
+function nextLevel() {
+  // Guard: stale setTimeout can fire during dead/gameover — ignore it
+  if (gs !== 'playing' && gs !== 'dead') return;
+  level++;
+  if (level > 10) {
+    if (score > hiScore) { hiScore = score; localStorage.setItem('bv_hi', hiScore); }
+    gs = 'victory'; sfx.victory(); return;
+  }
+  initLevel();
+}
+
+// ============================================================
+//  DRAW GAME SCENE
+// ============================================================
+function drawScene() {
+  ctx.fillStyle = '#000010'; ctx.fillRect(0,0,W,H);
+  drawStars();
+  drawUI();
+
+  // UFO label strip at top
+  if (ufo) {
+    ctx.fillStyle = 'rgba(255,100,180,0.12)';
+    ctx.fillRect(0, 64, W, 30);
+  }
+
+  // Barriers
+  for (const b of barriers) drawBarrier(b);
+
+  // Invaders
+  for (const inv of invs) { if (inv.alive) drawInvader(inv); }
+
+  // UFO
+  drawUFO();
+
+  // Player missile
+  if (pm) {
+    ctx.fillStyle = '#00ffff';
+    ctx.fillRect(pm.x, pm.y, pm.w, pm.h);
+    ctx.fillStyle = 'rgba(0,255,255,0.25)';
+    ctx.fillRect(pm.x-3, pm.y, pm.w+6, pm.h);
+  }
+
+  // Invader missiles
+  for (const m of ims) {
+    ctx.fillStyle = '#ff4400';
+    if (m.shape === 1) {
+      // zigzag
+      const zx = m.x + Math.sin(m.phase * 0.45) * 5;
+      ctx.fillRect(zx, m.y, m.w, m.h);
+      // trail
+      ctx.fillStyle = 'rgba(255,80,0,0.3)';
+      ctx.fillRect(zx, m.y+m.h, m.w, 6);
+    } else {
+      ctx.fillRect(m.x, m.y, m.w, m.h);
+      ctx.fillStyle = 'rgba(255,80,0,0.3)';
+      ctx.fillRect(m.x, m.y+m.h, m.w, 6);
+    }
+  }
+
+  // Player (flash when dead)
+  if (gs !== 'dead' || tick % 8 < 5) drawPlayer();
+
+  // Particles
+  for (const p of parts) {
+    ctx.globalAlpha = Math.max(0, p.life / p.max);
+    ctx.fillStyle = p.col;
+    ctx.fillRect(p.x - p.sz/2, p.y - p.sz/2, p.sz, p.sz);
+  }
+  ctx.globalAlpha = 1;
+
+  // Popups
+  ctx.textAlign = 'center'; ctx.font = 'bold 15px Courier New';
+  for (const p of pops) {
+    ctx.globalAlpha = Math.max(0, p.life / 60);
+    ctx.fillStyle = p.col; ctx.fillText(p.txt, p.x, p.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+//  MAIN GAME LOOP
+// ============================================================
+function loop() {
+  requestAnimationFrame(loop);
+  tick++;
+  ctx.clearRect(0, 0, W, H);
+
+  if (inputCD > 0) inputCD--;
+
+  switch (gs) {
+    case 'menu':
+      drawMenu();
+      if (K[' '] || K['Enter'] || tF) { getAC(); spacePrev = true; startGame(); }
+      break;
+
+    case 'announce':
+      drawScene();
+      drawAnnounce();
+      if (--annT <= 0) gs = 'playing';
+      break;
+
+    case 'playing':
+      updatePlayer();
+      updatePlayerMissile();
+      updateInvaders();
+      updateInvaderFire();
+      updateInvaderMissiles();
+      updateUFO();
+      updateParticles(); updatePopups();
+      drawScene();
+      break;
+
+    case 'dead':
+      updateParticles(); updatePopups();
+      drawScene();
+      if (--deadT <= 0) {
+        px = W/2 - PLAYER_W/2;
+        spacePrev = true; // prevent auto-fire the moment Barney respawns
+        gs = 'playing';
+      }
+      break;
+
+    case 'gameover':
+      drawScene();
+      drawGameOver();
+      if (inputCD <= 0 && (K[' '] || K['Enter'] || tF)) { spacePrev = true; startGame(); }
+      break;
+
+    case 'victory':
+      drawScene();
+      drawVictory();
+      if (inputCD <= 0 && (K[' '] || K['Enter'] || tF)) { spacePrev = true; startGame(); }
+      break;
+  }
+}
+
+// ============================================================
+//  INPUT
+// ============================================================
+document.addEventListener('keydown', e => {
+  K[e.key] = true;
+  if ([' ','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))
+    e.preventDefault();
+  if (!AC) getAC();
+});
+document.addEventListener('keyup', e => { K[e.key] = false; });
+
+// Mobile buttons
+function holdBtn(id, setter) {
+  const el = document.getElementById(id);
+  el.addEventListener('touchstart', e => { e.preventDefault(); setter(true); if(!AC) getAC(); }, {passive:false});
+  el.addEventListener('touchend',   e => { e.preventDefault(); setter(false); }, {passive:false});
+  el.addEventListener('touchcancel',e => { e.preventDefault(); setter(false); }, {passive:false});
+  // Mouse fallback for desktop testing
+  el.addEventListener('mousedown', () => setter(true));
+  el.addEventListener('mouseup',   () => setter(false));
+  el.addEventListener('mouseleave',() => setter(false));
+}
+holdBtn('btn-left',  v => tL = v);
+holdBtn('btn-right', v => tR = v);
+holdBtn('btn-fire',  v => tF = v);
+
+// ============================================================
+//  GO!
+// ============================================================
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
