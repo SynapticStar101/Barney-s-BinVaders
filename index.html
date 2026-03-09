@@ -873,6 +873,7 @@
     }
 
     function startGame() {
+      if (nameEl) nameEl.blur();   // dismiss mobile keyboard
       score = 0; lives = 3; level = 1;
       initLevel();
     }
