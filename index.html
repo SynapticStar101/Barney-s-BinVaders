@@ -79,6 +79,11 @@
   </style>
 </head>
 <body>
+<!-- Hidden input captures keyboard for name entry on all devices including mobile -->
+<input id="name-el" type="text" maxlength="12"
+  autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+  style="position:fixed;opacity:0.01;pointer-events:none;top:0;left:0;width:2px;height:2px;border:none;outline:none;">
+
 <div class="scanlines"></div>
 <div id="wrap">
   <canvas id="gc"></canvas>
@@ -96,6 +101,10 @@
 //  Classic Space Invaders — Barney's Bins rubbish aesthetic
 //  Single HTML file. Zero assets. All graphics & audio in code.
 // ============================================================
+
+// --- LEADERBOARD (Google Apps Script) ---
+// Paste your deployed Apps Script URL here after following the setup guide:
+const SCRIPT_URL = 'PASTE_YOUR_APPS_SCRIPT_URL_HERE';
 
 // --- CANVAS ---
 const canvas = document.getElementById('gc');
@@ -273,6 +282,11 @@ let pops     = [];
 let annT     = 0;
 let deadT    = 0;
 let inputCD  = 0;  // cooldown frames before input is accepted again
+
+// Leaderboard
+let lbData       = [];   // array of {name, score, level} from Google Sheet
+let lbPlayerRank = -1;   // index of this player in lbData (-1 = not in top 10)
+let nameEl       = null; // set after DOM ready
 
 // Input
 let K        = {};
@@ -1025,7 +1039,14 @@ function loseLife() {
   pm = null; ims = [];
   if (lives <= 0) {
     if (score > hiScore) { hiScore = score; localStorage.setItem('bv_hi', hiScore); }
-    gs = 'gameover'; inputCD = 90; sfx.gameOver();
+    sfx.gameOver();
+    // Small delay then go to name entry
+    setTimeout(() => {
+      gs = 'namentry';
+      inputCD = 60;
+      if (nameEl) { nameEl.value = ''; nameEl.focus(); }
+    }, 1800);
+    gs = 'gameover'; // show gameover scene briefly while audio plays
   } else {
     gs = 'dead'; deadT = 140;
   }
@@ -1111,6 +1132,155 @@ function drawScene() {
 }
 
 // ============================================================
+//  LEADERBOARD — FETCH & SUBMIT
+// ============================================================
+async function submitAndFetch(name) {
+  gs = 'submitting';
+  const connected = SCRIPT_URL && !SCRIPT_URL.startsWith('PASTE');
+
+  if (connected) {
+    // POST score — no-cors so Apps Script doesn't need preflight headers
+    try {
+      fetch(SCRIPT_URL, {
+        method: 'POST',
+        mode:   'no-cors',
+        body:   JSON.stringify({ name, score, level })
+      });
+    } catch(e) {}
+
+    // Wait 1.8s for the sheet to save, then fetch the top 10
+    await new Promise(r => setTimeout(r, 1800));
+    try {
+      const res  = await fetch(SCRIPT_URL + '?t=' + Date.now());
+      const data = await res.json();
+      lbData = data.scores || [];
+      // Find this player's rank
+      lbPlayerRank = lbData.findIndex(r => r.name === name && +r.score === score);
+    } catch(e) { lbData = []; }
+  }
+
+  gs = 'leaderboard';
+}
+
+// ============================================================
+//  DRAWING: NAME ENTRY SCREEN
+// ============================================================
+function drawNameEntry() {
+  ctx.fillStyle = 'rgba(0,0,0,0.88)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+
+  ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 22;
+  ctx.fillStyle = '#ff2222'; ctx.font = 'bold 52px Courier New';
+  ctx.fillText('GAME OVER', W/2, 168);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = '#FFD700'; ctx.font = '26px Courier New';
+  ctx.fillText('FINAL SCORE: ' + score, W/2, 220);
+  if (score > 0 && score >= hiScore) {
+    ctx.fillStyle = '#00ff88'; ctx.font = '18px Courier New';
+    ctx.fillText('★  NEW HIGH SCORE!  ★', W/2, 252);
+  }
+
+  ctx.fillStyle = '#FFD700'; ctx.font = '20px Courier New';
+  ctx.fillText('ENTER YOUR NAME FOR THE LEADERBOARD:', W/2, 306);
+
+  // Input box
+  const bw = 360, bh = 48, bx = W/2 - bw/2, by = 322;
+  ctx.fillStyle = '#000c20'; ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = '#FFD700'; ctx.lineWidth = 2; ctx.strokeRect(bx, by, bw, bh);
+
+  const typed = nameEl ? nameEl.value.toUpperCase() : '';
+  const cursor = (tick % 40 < 20) ? '█' : ' ';
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 24px Courier New';
+  ctx.fillText(typed + cursor, W/2, by + 33);
+
+  ctx.fillStyle = '#888'; ctx.font = '14px Courier New';
+  ctx.fillText('Max 12 characters  —  Press ENTER to submit', W/2, 392);
+
+  // Skip option
+  const pulse = (tick % 30 < 15);
+  ctx.fillStyle = pulse ? '#555' : '#333'; ctx.font = '13px Courier New';
+  ctx.fillText('(Press ESCAPE to skip leaderboard)', W/2, 426);
+}
+
+// ============================================================
+//  DRAWING: SUBMITTING SCREEN
+// ============================================================
+function drawSubmitting() {
+  ctx.fillStyle = 'rgba(0,0,16,0.94)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 28px Courier New';
+  const dots = '.'.repeat(1 + (tick % 60 < 20 ? 0 : tick % 60 < 40 ? 1 : 2));
+  ctx.fillText('UPLOADING TO THE RUBBISH DATABASE' + dots, W/2, H/2 - 20);
+  ctx.fillStyle = '#555'; ctx.font = '16px Courier New';
+  ctx.fillText('Contacting Barney\'s servers...', W/2, H/2 + 20);
+}
+
+// ============================================================
+//  DRAWING: LEADERBOARD SCREEN
+// ============================================================
+function drawLeaderboard() {
+  ctx.fillStyle = 'rgba(0,0,16,0.94)'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign = 'center';
+
+  // Header
+  ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 14;
+  ctx.fillStyle = '#FFD700'; ctx.font = 'bold 28px Courier New';
+  ctx.fillText("★  BINVADERS GLOBAL TOP 10  ★", W/2, 52);
+  ctx.shadowBlur = 0;
+
+  ctx.strokeStyle = '#FFD700'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(80,64); ctx.lineTo(W-80,64); ctx.stroke();
+
+  if (lbData.length === 0) {
+    ctx.fillStyle = '#888'; ctx.font = '18px Courier New';
+    ctx.fillText('No scores yet — you could be first!', W/2, H/2);
+    if (!SCRIPT_URL.startsWith('PASTE')) {
+      ctx.fillStyle = '#555'; ctx.font = '14px Courier New';
+      ctx.fillText('(Could not reach the database — check connection)', W/2, H/2 + 36);
+    } else {
+      ctx.fillStyle = '#ff6644'; ctx.font = '14px Courier New';
+      ctx.fillText('Leaderboard URL not configured yet', W/2, H/2 + 36);
+    }
+  } else {
+    // Column headers
+    ctx.fillStyle = '#666'; ctx.font = '13px Courier New'; ctx.textAlign = 'left';
+    ctx.fillText('RANK', 100, 90); ctx.fillText('NAME', 190, 90);
+    ctx.textAlign = 'right';
+    ctx.fillText('SCORE', 580, 90); ctx.fillText('LVL', 660, 90);
+
+    lbData.slice(0,10).forEach((entry, i) => {
+      const y = 122 + i * 46;
+      const isPlayer = (i === lbPlayerRank);
+      const isTop3   = i < 3;
+
+      // Highlight bar for this player
+      if (isPlayer) {
+        ctx.fillStyle = 'rgba(255,215,0,0.10)';
+        ctx.fillRect(80, y - 26, W - 160, 36);
+      }
+
+      ctx.fillStyle = isPlayer ? '#FFD700' : isTop3 ? '#00ff88' : '#cccccc';
+      ctx.font = isPlayer ? 'bold 17px Courier New' : '16px Courier New';
+
+      ctx.textAlign = 'center'; ctx.fillText('#' + (i+1), 138, y);
+      ctx.textAlign = 'left';   ctx.fillText(String(entry.name).toUpperCase(), 190, y);
+      ctx.textAlign = 'right';
+      ctx.fillText(String(entry.score).padStart(6,'0'), 580, y);
+      ctx.fillText('L' + entry.level, 660, y);
+    });
+  }
+
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(80, H-58); ctx.lineTo(W-80, H-58); ctx.stroke();
+
+  const pulse = (tick % 22 < 11);
+  ctx.fillStyle = pulse ? '#fff' : '#777';
+  ctx.font = 'bold 18px Courier New'; ctx.textAlign = 'center';
+  ctx.fillText('PRESS SPACE OR FIRE TO PLAY AGAIN', W/2, H - 28);
+}
+
+// ============================================================
 //  MAIN GAME LOOP
 // ============================================================
 function loop() {
@@ -1154,9 +1324,25 @@ function loop() {
       break;
 
     case 'gameover':
+      // Brief pause showing game over scene while death audio plays, then → namentry
       drawScene();
       drawGameOver();
-      if (inputCD <= 0 && (K[' '] || K['Enter'] || tF)) { spacePrev = true; startGame(); }
+      break;
+
+    case 'namentry':
+      drawScene();
+      drawNameEntry();
+      break;
+
+    case 'submitting':
+      drawScene();
+      drawSubmitting();
+      break;
+
+    case 'leaderboard':
+      drawScene();
+      drawLeaderboard();
+      if (inputCD <= 0 && (K[' '] || tF)) { spacePrev = true; startGame(); }
       break;
 
     case 'victory':
@@ -1172,6 +1358,24 @@ function loop() {
 // ============================================================
 document.addEventListener('keydown', e => {
   K[e.key] = true;
+
+  // Name entry — handle submit (Enter) and skip (Escape)
+  if (gs === 'namentry') {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const name = (nameEl ? nameEl.value.trim() : '') || 'PLAYER';
+      submitAndFetch(name.substring(0, 12));
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      // Skip submission — go straight to leaderboard (offline)
+      submitAndFetch('');
+      return;
+    }
+    return; // let all other keys go to the hidden input naturally
+  }
+
   if ([' ','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))
     e.preventDefault();
   if (!AC) getAC();
@@ -1196,6 +1400,17 @@ holdBtn('btn-fire',  v => tF = v);
 // ============================================================
 //  GO!
 // ============================================================
+nameEl = document.getElementById('name-el');
+
+// Mobile fire button also submits name entry
+document.getElementById('btn-fire').addEventListener('touchstart', e => {
+  if (gs === 'namentry') {
+    e.preventDefault();
+    const name = (nameEl ? nameEl.value.trim() : '') || 'PLAYER';
+    submitAndFetch(name.substring(0, 12));
+  }
+}, { passive: false });
+
 requestAnimationFrame(loop);
 </script>
 </body>
